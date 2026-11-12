@@ -1,0 +1,15 @@
+/* ink — dark theme. A theme is tokens only: copy this file, change values, link it after core/deck.css.
+   Activate with <html data-theme="ink"> or ?theme=ink. */
+:root[data-theme="ink"] {
+  --bg: #111318;
+  --surface: #1a1d24;
+  --fg: #eceef2;
+  --muted: #969cab;
+  --line: #2e323c;
+  --accent: #9d93ff;
+  --accent-2: #4fd1d9;
+  --warn: #f0b34a;
+  --bad: #ff7a8a;
+  --good: #6fd39a;
+  --backdrop: #08090b;
+}

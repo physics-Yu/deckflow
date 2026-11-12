@@ -1,0 +1,1254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deckflow</title>
+<style>
+/* deckflow core — the contract layer.
+   Every slide is a fixed 1920×1080 stage that is scaled to the window.
+   All sizes below are stage pixels: 24px here == 12pt on a 13.33in slide.
+   Themes override the tokens in :root only; they never touch layout. */
+
+:root {
+  /* colour tokens */
+  --bg: #f6f5f1;
+  --surface: #ffffff;
+  --fg: #1a1c22;
+  --muted: #6b7080;
+  --line: #d9d7cf;
+  --accent: #5546d6;
+  --accent-2: #0b8f9c;
+  --warn: #c97a00;
+  --bad: #c8374c;
+  --good: #2e8b57;
+  --backdrop: #e9e7e0;
+
+  /* type tokens (stage px). --fs-label is the floor for anything on a figure. */
+  --fs-hero: 104px;
+  --fs-title: 54px;
+  --fs-body: 32px;
+  --fs-label: 24px;
+  --fs-note: 24px;
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+
+  /* geometry */
+  --pad-x: 96px;
+  --pad-y: 64px;
+  --gap: 40px;
+  --radius: 18px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+html { overflow: hidden; }
+html.flow, html.overview { overflow: auto; }
+body {
+  background: var(--backdrop);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ---------- stage & modes ---------- */
+.deck { --k: 0.1; }   /* real value is set by deck.js; start small so nothing widens the viewport */
+.frame {
+  position: relative;
+  width: calc(1920px * var(--k));
+  height: calc(1080px * var(--k));
+  overflow: hidden;
+  background: var(--bg);
+  flex: none;
+}
+.slide {
+  position: absolute; top: 0; left: 0;
+  width: 1920px; height: 1080px;
+  transform-origin: 0 0;
+  transform: scale(var(--k));
+  padding: var(--pad-y) var(--pad-x);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--gap);
+  font-size: var(--fs-body);
+  line-height: 1.35;
+  background: var(--bg);
+}
+
+/* paged: one slide fills the window */
+.deck.paged { height: 100vh; display: grid; place-items: center; }
+.deck.paged .frame { box-shadow: 0 10px 60px rgba(0,0,0,.14); }
+.deck.paged .frame:not(.active) { position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none; }
+
+/* flow: narrow windows and print — slides stacked, page scrolls */
+body.flow { overflow: auto; }
+.deck.flow { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 12px 0; }
+
+/* overview: thumbnail grid */
+body.overview { overflow: auto; }
+.deck.overview { display: flex; flex-wrap: wrap; gap: 24px; padding: 32px; justify-content: center; }
+.deck.overview .frame { cursor: pointer; border-radius: 6px; outline: 2px solid transparent; }
+.deck.overview .frame.active { outline-color: var(--accent); }
+.deck.overview .frame * { pointer-events: none; }
+
+/* ---------- slide anatomy ---------- */
+.slide > h2 {
+  margin: 0;
+  font-size: var(--fs-title);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.12;
+}
+.slide > .body { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: var(--gap); }
+.slide p { margin: 0; }
+
+/* title slide */
+.slide[data-layout="title"] { grid-template-rows: 1fr; }
+.slide[data-layout="title"] h1 { margin: 0; font-size: var(--fs-hero); font-weight: 700; letter-spacing: -0.03em; line-height: 1.02; }
+.slide[data-layout="title"] .sub { font-size: 40px; color: var(--muted); margin-top: 28px; }
+.slide[data-layout="title"] .date { font-size: var(--fs-label); color: var(--muted); margin-top: 56px; font-family: var(--font-mono); }
+
+/* bare: no title row, the figure owns the whole stage */
+.slide[data-layout="bare"] { grid-template-rows: 1fr; }
+
+/* ---------- layout helpers (free to ignore; compose your own) ---------- */
+.cols { display: grid; grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr)); gap: var(--gap); flex: 1; min-height: 0; }
+.cols.wide-left { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); }
+.cols.wide-right { grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr); }
+.stack { display: flex; flex-direction: column; gap: 24px; min-height: 0; min-width: 0; }
+.row { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; min-height: 0; min-width: 0; }
+
+figure { margin: 0; display: flex; flex-direction: column; gap: 14px; min-height: 0; min-width: 0; }
+figure > svg, figure > canvas { flex: 1; min-height: 0; width: 100%; display: block; }
+figcaption { font-size: var(--fs-note); color: var(--muted); }
+
+.card { background: var(--surface); border: 1.5px solid var(--line); border-radius: var(--radius); padding: 28px 32px; }
+.cards { display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 24px; }
+.big { font-size: 72px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.05; margin: 6px 0 12px; font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.label { font-size: var(--fs-label); }
+.note { font-size: var(--fs-note); color: var(--muted); }
+.mono { font-family: var(--font-mono); }
+.accent { color: var(--accent); } .accent-2 { color: var(--accent-2); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 10px 28px; font-size: var(--fs-label); color: var(--fg); align-items: center; }
+.legend .key { display: inline-flex; align-items: center; gap: 10px; }
+.legend .swatch { width: 34px; height: 0; border-top: 5px solid var(--c, var(--fg)); border-radius: 3px; }
+.legend .swatch.dash { border-top-style: dashed; }
+.legend .swatch.dot { width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--c, var(--fg)); }
+.legend .swatch.box { width: 22px; height: 22px; border: 0; border-radius: 5px; background: var(--c, var(--fg)); }
+.legend .key.off { opacity: .35; }
+button.key { font: inherit; color: inherit; background: none; border: 0; padding: 4px 6px; cursor: pointer; border-radius: 8px; }
+button.key:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); }
+
+/* controls — everything a presenter touches lives inside [data-interactive] */
+.controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: var(--fs-label); }
+.controls button, .seg button {
+  font: inherit; font-size: var(--fs-label); color: var(--fg);
+  background: var(--surface); border: 1.5px solid var(--line); border-radius: 12px;
+  padding: 8px 20px; cursor: pointer;
+}
+.controls button:hover, .seg button:hover { border-color: var(--fg); }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -1.5px; }
+.seg button:first-child { border-radius: 12px 0 0 12px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 12px 12px 0; }
+.controls button.on, .seg button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+input[type="range"] { accent-color: var(--accent); width: 360px; height: 28px; }
+
+/* provenance & open items */
+.placeholder {
+  border: 3px dashed var(--warn); border-radius: var(--radius); color: var(--warn);
+  display: grid; place-items: center; text-align: center; padding: 24px; font-size: var(--fs-label);
+  background: color-mix(in srgb, var(--warn) 6%, transparent);
+}
+
+/* progressive reveal */
+.deck.paged [data-step] { opacity: 0; transition: opacity .25s; }
+.deck.paged [data-step].on { opacity: 1; }
+
+/* ---------- chrome (kept minimal on purpose) ---------- */
+.deck-progress { position: fixed; left: 0; bottom: 0; height: 4px; background: var(--accent); width: 0; transition: width .25s; z-index: 5; }
+.deck-count { position: fixed; right: 16px; bottom: 12px; font: 13px var(--font-mono); color: var(--muted); z-index: 5; opacity: .7; }
+.deck[data-chrome="none"] ~ .deck-progress, .deck[data-chrome="none"] ~ .deck-count,
+body.flow .deck-progress, body.flow .deck-count, body.overview .deck-progress, body.overview .deck-count { display: none; }
+
+/* ---------- print: one slide per page ---------- */
+@page { size: 1920px 1080px; margin: 0; }
+@media print {
+  body { overflow: visible; background: none; }
+  .deck { display: block !important; padding: 0 !important; height: auto !important; --k: 1 !important; }
+  .frame { position: relative !important; visibility: visible !important; break-after: page; box-shadow: none !important; }
+  [data-step] { opacity: 1 !important; }
+  .deck-progress, .deck-count, .review-panel, .review-tag { display: none !important; }
+}
+
+</style>
+<style>
+/* ink — dark theme. A theme is tokens only: copy this file, change values, link it after core/deck.css.
+   Activate with <html data-theme="ink"> or ?theme=ink. */
+:root[data-theme="ink"] {
+  --bg: #111318;
+  --surface: #1a1d24;
+  --fg: #eceef2;
+  --muted: #969cab;
+  --line: #2e323c;
+  --accent: #9d93ff;
+  --accent-2: #4fd1d9;
+  --warn: #f0b34a;
+  --bad: #ff7a8a;
+  --good: #6fd39a;
+  --backdrop: #08090b;
+}
+
+</style>
+<style>
+  svg text { font-family: var(--font-sans); fill: var(--fg); }
+  .s-line { stroke: var(--line); } .s-fg { stroke: var(--fg); } .s-accent { stroke: var(--accent); } .s-accent2 { stroke: var(--accent-2); } .s-warn { stroke: var(--warn); } .s-muted { stroke: var(--muted); }
+  .f-bg { fill: var(--bg); } .f-surface { fill: var(--surface); } .f-fg { fill: var(--fg); } .f-accent { fill: var(--accent); } .f-accent2 { fill: var(--accent-2); } .f-warn { fill: var(--warn); } .f-muted { fill: var(--muted); } .f-line { fill: var(--line); }
+  svg text.t-muted { fill: var(--muted); } svg text.t-accent { fill: var(--accent); } svg text.t-accent2 { fill: var(--accent-2); } svg text.t-warn { fill: var(--warn); } svg text.t-bg { fill: var(--bg); }
+
+  /* loop */
+  #loop .stage { cursor: pointer; }
+  #loop .stage rect { fill: var(--surface); stroke: var(--line); stroke-width: 2.5; transition: fill .15s, stroke .15s; }
+  #loop .stage:hover rect { stroke: var(--fg); }
+  #loop .stage.on rect { fill: var(--fg); stroke: var(--fg); }
+  #loop .stage.on text { fill: var(--bg); }
+  #loop .detail { display: grid; grid-template-columns: 1fr 1.3fr 1.3fr; gap: 24px; }
+  #loop .detail .k { font-size: var(--fs-label); color: var(--muted); margin-bottom: 8px; }
+
+  /* layers */
+  #layers .ring { border-radius: 26px; padding: 34px 40px; display: flex; flex-direction: column; gap: 28px; }
+  #layers .open { margin-top: auto; justify-content: space-around; padding: 6px 0 14px; }
+  #layers .open .chip { font-size: 30px; padding: 10px 26px; border-style: dashed; background: none; }
+  #layers .free { border: 3px dashed var(--line); flex: 1; }
+  #layers .default { border: 3px solid var(--warn); background: color-mix(in srgb, var(--warn) 6%, transparent); }
+  #layers .must { border: 3px solid var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); }
+  #layers .head { display: flex; align-items: baseline; gap: 22px; flex-wrap: wrap; }
+  #layers .name { font-size: 46px; font-weight: 700; letter-spacing: .02em; }
+  #layers .chips { display: flex; gap: 12px; flex-wrap: wrap; }
+  #layers .chip { font-size: 27px; padding: 8px 20px; border-radius: 99px; background: var(--surface); border: 1.5px solid var(--line); white-space: nowrap; }
+
+  /* one-point */
+  #one-point pre { margin: 0; font: 26px/1.6 var(--font-mono); white-space: pre-wrap; }
+  #one-point .mini { background: var(--surface); border: 1.5px solid var(--line); border-radius: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.08); }
+
+  /* review */
+  #review .tile { text-align: center; padding: 22px 12px; }
+  #review .items { font: 24px/1.5 var(--font-mono); display: flex; flex-direction: column; gap: 6px; }
+  #review .items div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 14px; border-left: 4px solid var(--c); }
+  #review .marker { font: 24px var(--font-mono); padding: 8px 16px; border-radius: 10px; border: 2px solid var(--c); color: var(--c); }
+
+  /* start */
+  #start .card { display: flex; flex-direction: column; gap: 18px; padding: 36px; }
+  #start .cmd { font: 24px var(--font-mono); background: var(--fg); color: var(--bg); padding: 12px 18px; border-radius: 10px; }
+  #start .ico { flex: 1; min-height: 0; width: 100%; margin: 10px 0; }
+  #start .name { font-size: 54px; font-weight: 700; letter-spacing: -.02em; }
+  kbd { font: 24px var(--font-mono); border: 1.5px solid var(--line); border-bottom-width: 4px; border-radius: 8px; padding: 2px 12px; background: var(--surface); }
+</style>
+</head>
+<body>
+
+<main class="deck" data-title-style="topic">
+
+  <!-- ============================================================ title -->
+  <section class="slide" id="title" data-layout="title">
+    <div class="cols wide-left" style="align-items:center">
+      <div>
+        <h1>deckflow</h1>
+        <div class="sub">A workflow for building talks with an AI, in HTML</div>
+        <div class="date">November 2026</div>
+      </div>
+      <figure data-kind="schematic" style="height:560px">
+        <svg viewBox="0 0 640 520" aria-hidden="true">
+          <rect x="150" y="30" width="460" height="260" rx="14" class="f-surface s-line" stroke-width="2.5" opacity=".55"/>
+          <rect x="90" y="110" width="460" height="260" rx="14" class="f-surface s-line" stroke-width="2.5" opacity=".8"/>
+          <rect x="30" y="190" width="460" height="260" rx="14" class="f-surface s-fg" stroke-width="3"/>
+          <rect x="62" y="222" width="150" height="16" rx="8" class="f-fg"/>
+          <polyline points="70,410 130,396 190,360 250,300 310,282 370,330 450,404" fill="none" class="s-accent" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+          <polyline points="70,330 130,338 190,352 250,372 310,388 370,398 450,404" fill="none" class="s-accent2" stroke-width="6" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="14 10"/>
+          <line x1="250" y1="262" x2="250" y2="424" class="s-fg" stroke-width="2.5"/>
+          <circle cx="250" cy="300" r="10" class="f-accent"/>
+          <circle cx="250" cy="372" r="10" class="f-accent2"/>
+        </svg>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================================================ loop -->
+  <section class="slide" id="loop">
+    <h2>Seven stages, three gates</h2>
+    <div class="body">
+      <figure class="grow" data-kind="schematic">
+        <svg id="loop-svg" viewBox="0 30 1728 380" data-interactive></svg>
+        <div class="legend" data-role="legend">
+          <span class="key"><span class="swatch box" style="--c:var(--warn);transform:rotate(45deg) scale(.8)"></span>gate: the human decides before work continues</span>
+          <span class="key"><span class="swatch dash" style="--c:var(--accent)"></span>feedback goes back to where it is cheapest to fix</span>
+        </div>
+      </figure>
+      <div class="detail" id="loop-detail">
+        <div class="card"><div class="k">Artifact</div><div class="mono" data-f="file"></div></div>
+        <div class="card"><div class="k">The AI</div><div data-f="ai"></div></div>
+        <div class="card"><div class="k">The human</div><div data-f="human"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ layers -->
+  <section class="slide" id="layers">
+    <h2>A small contract, a large open space</h2>
+    <div class="body">
+      <figure class="grow" data-kind="schematic"><div class="ring free">
+        <div class="head"><span class="name muted">FREE</span><span class="label muted">not checked · yours to decide</span></div>
+        <div class="ring default">
+          <div class="head"><span class="name warn">DEFAULT</span><span class="label muted">warning · fix it, or waive it on the slide with a reason</span></div>
+          <div class="chips"><span class="chip">≤ 45 words of prose</span><span class="chip">text ≥ 24 px</span><span class="chip">something to look at</span><span class="chip">legend</span><span class="chip">every figure cites its source</span></div>
+          <div class="ring must">
+            <div class="head"><span class="name bad">MUST</span><span class="label muted">error · machine-checked in the browser</span></div>
+            <div class="chips"><span class="chip">stable slide ids</span><span class="chip">nothing leaves the stage</span><span class="chip">text ≥ 20 px, SVG included</span><span class="chip">axes are labelled</span><span class="chip">one offline file</span><span class="chip">no script errors</span></div>
+          </div>
+        </div>
+        <div class="chips open"><span class="chip">narrative</span><span class="chip">which figure</span><span class="chip">interaction</span><span class="chip">layout</span><span class="chip">theme</span><span class="chip">any JavaScript</span></div>
+      </div></figure>
+    </div>
+  </section>
+
+  <!-- ============================================================ one-point -->
+  <section class="slide" id="one-point">
+    <h2>One slide, one point, one figure</h2>
+    <div class="body">
+      <div class="cols wide-right" style="align-items:stretch">
+        <div class="stack">
+          <div class="card grow">
+            <div class="label muted" style="margin-bottom:14px">storyboard.md</div>
+<pre class="mono"><b>## tradeoff · approved</b>
+<span class="accent">point</span>    no fixed winner: the
+         ranking flips with
+         one parameter
+<span class="accent">visual</span>   scatter, x = loss,
+         y = rate; slider
+<span class="accent">source</span>   S2</pre>
+          </div>
+          <div class="controls" data-interactive>
+            <span class="seg" id="op-seg"><button type="button" data-v="text">written to be read</button><button type="button" class="on" data-v="fig">built to be shown</button></span>
+          </div>
+        </div>
+        <figure data-kind="schematic">
+          <svg id="op-svg" class="mini" viewBox="0 0 960 600"></svg>
+          <figcaption id="op-cap"></figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ tradeoff -->
+  <section class="slide" id="tradeoff">
+    <h2>A parameter flips the ranking</h2>
+    <div class="body">
+      <div class="cols wide-left">
+        <figure data-kind="schematic">
+          <div id="to-plot" class="grow"></div>
+          <figcaption>Toy model with illustrative numbers. Each point is one schedule; lines join schedules of the same plan.</figcaption>
+        </figure>
+        <div class="stack" style="justify-content:center">
+          <div class="controls" data-interactive>
+            <span>read time</span>
+            <input type="range" id="to-read" min="0.1" max="2" step="0.05" value="0.3" style="width:300px">
+            <span class="mono" id="to-read-v"></span>
+          </div>
+          <div class="card">
+            <div class="label muted">fastest schedule</div>
+            <div class="big" id="to-best"></div>
+            <div class="label" id="to-best-sub"></div>
+          </div>
+          <div class="card">
+            <div class="label muted">lowest loss</div>
+            <div class="big" id="to-safe"></div>
+            <div class="label" id="to-safe-sub"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ replay -->
+  <section class="slide" id="replay">
+    <h2>Process replay</h2>
+    <div class="body">
+      <figure class="grow" data-kind="schematic">
+        <svg id="rp-svg" viewBox="0 0 1728 600"><g id="rp-world"></g></svg>
+        <div class="legend" data-role="legend">
+          <span class="key"><span class="swatch dot" style="--c:var(--fg)"></span>item at rest</span>
+          <span class="key"><span class="swatch dot" style="--c:var(--accent-2)"></span>held and moving</span>
+          <span class="key"><span class="swatch dot" style="--c:var(--warn)"></span>being processed or read</span>
+          <span class="key muted">scroll to zoom · drag to pan · double-click to reset</span>
+        </div>
+      </figure>
+      <div id="rp-player"></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ review -->
+  <section class="slide" id="review">
+    <h2>The deck checks itself</h2>
+    <div class="body">
+      <div class="cols wide-right">
+        <div class="stack">
+          <div class="label muted">four markers in the HTML</div>
+          <div class="row"><span class="marker" style="--c:var(--good)">data-src="S2"</span><span class="label">traced to a source</span></div>
+          <div class="row"><span class="marker" style="--c:var(--accent)" data-derived="example marker: a value the agent fitted itself">data-derived</span><span class="label">computed by the AI</span></div>
+          <div class="row"><span class="marker" style="--c:var(--accent)" data-unverified="example marker: a citation written from memory">data-unverified</span><span class="label">not checked yet</span></div>
+          <div class="row"><span class="marker" style="--c:var(--warn)" data-placeholder="example marker: a figure the human still has to send">data-placeholder</span><span class="label">waiting for material</span></div>
+          <div class="controls" data-interactive style="margin-top:auto">
+            <button type="button" id="rv-run">Run the review on this deck</button>
+            <span class="muted">or press <kbd>R</kbd></span>
+          </div>
+        </div>
+        <div class="stack">
+          <div class="cards" style="--n:4" id="rv-tiles"></div>
+          <div class="card grow">
+            <div class="label muted" style="margin-bottom:12px">what the human still has to confirm or supply</div>
+            <div class="items mono" id="rv-items"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ start -->
+  <section class="slide" id="start">
+    <h2>Three ways in</h2>
+    <div class="body">
+      <div class="cards grow" style="--n:3">
+        <div class="card"><div class="name">new</div><div>A topic and a pile of material.</div><div class="muted">Starts at the brief.</div><svg viewBox="0 0 300 170" class="ico" aria-hidden="true"><rect x="60" y="20" width="180" height="110" rx="10" fill="none" class="s-line" stroke-width="4" stroke-dasharray="12 9"/><line x1="150" y1="50" x2="150" y2="100" class="s-accent" stroke-width="8" stroke-linecap="round"/><line x1="125" y1="75" x2="175" y2="75" class="s-accent" stroke-width="8" stroke-linecap="round"/></svg><div style="margin-top:auto" class="cmd mono">/deck new my-talk</div></div>
+        <div class="card"><div class="name">adapt</div><div>A report, a page or an old deck.</div><div class="muted">Starts with an inventory.</div><svg viewBox="0 0 300 170" class="ico" aria-hidden="true"><rect x="20" y="10" width="90" height="130" rx="8" fill="none" class="s-line" stroke-width="4"/><line x1="36" y1="40" x2="94" y2="40" class="s-line" stroke-width="5"/><line x1="36" y1="62" x2="94" y2="62" class="s-line" stroke-width="5"/><line x1="36" y1="84" x2="80" y2="84" class="s-line" stroke-width="5"/><path d="M124 75 H156 M146 63 L158 75 L146 87" fill="none" class="s-accent" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><rect x="172" y="30" width="110" height="90" rx="10" fill="none" class="s-fg" stroke-width="4"/><polyline points="186,100 212,78 236,88 268,52" fill="none" class="s-accent" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg><div style="margin-top:auto" class="cmd mono">/deck adapt my-talk report.html</div></div>
+        <div class="card"><div class="name">revise</div><div>Comments, slide by slide.</div><div class="muted">Starts by sorting them.</div><svg viewBox="0 0 300 170" class="ico" aria-hidden="true"><rect x="40" y="30" width="180" height="110" rx="10" fill="none" class="s-fg" stroke-width="4"/><polyline points="58,116 96,92 134,100 200,58" fill="none" class="s-line" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><path d="M190 14 h80 a10 10 0 0 1 10 10 v34 a10 10 0 0 1 -10 10 h-46 l-16 16 v-16 h-18 a10 10 0 0 1 -10 -10 v-34 a10 10 0 0 1 10 -10 z" class="f-accent"/></svg><div style="margin-top:auto" class="cmd mono">/deck revise my-talk</div></div>
+      </div>
+      <div class="row label" style="justify-content:center;gap:36px">
+        <span><kbd>←</kbd> <kbd>→</kbd> turn</span><span><kbd>O</kbd> overview</span><span><kbd>F</kbd> fullscreen</span><span><kbd>R</kbd> review</span>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+/* deckflow core runtime: scaling, navigation, lifecycle.
+   No dependencies. Works from file://. Exposes window.Deck. */
+(function () {
+  'use strict';
+  var W = 1920, H = 1080, NARROW = 720;
+
+  // capture runtime errors as early as possible; review.js reports them
+  var errors = [];
+  window.addEventListener('error', function (e) { errors.push(String(e.message || e.error || 'error')); });
+  window.addEventListener('unhandledrejection', function (e) { errors.push('unhandled rejection: ' + String(e.reason)); });
+
+  var deck, frames = [], slides = [], index = 0, step = 0, mode = 'paged', progress, count;
+
+  function init() {
+    deck = document.querySelector('.deck');
+    if (!deck) return;
+    slides = Array.prototype.slice.call(deck.querySelectorAll(':scope > .slide'));
+    slides.forEach(function (s) {
+      var f = document.createElement('div');
+      f.className = 'frame';
+      deck.insertBefore(f, s);
+      f.appendChild(s);
+      frames.push(f);
+      f.addEventListener('click', function () { if (mode === 'overview') { setMode('paged'); go(slides.indexOf(s)); } });
+    });
+    progress = document.createElement('div'); progress.className = 'deck-progress';
+    count = document.createElement('div'); count.className = 'deck-count';
+    document.body.appendChild(progress); document.body.appendChild(count);
+
+    var theme = new URLSearchParams(location.search).get('theme');
+    if (theme) document.documentElement.setAttribute('data-theme', theme);
+
+    window.addEventListener('resize', layout);
+    window.addEventListener('hashchange', fromHash);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('beforeprint', function () { setMode('flow'); });
+    touch();
+    layout();
+    fromHash() || go(0);
+    // authors hook slide lifecycle with: section.addEventListener('deck:enter', fn)
+    document.dispatchEvent(new CustomEvent('deck:ready'));
+  }
+
+  function layout() {
+    // clientWidth, not innerWidth: on phones innerWidth grows with overflowing content
+    var root = document.documentElement;
+    var vw = Math.min(window.innerWidth, root.clientWidth || window.innerWidth);
+    var vh = Math.min(window.innerHeight, root.clientHeight || window.innerHeight);
+    if (!vw || !vh) return;   // hidden tab: keep the last good scale
+    var auto = vw < NARROW ? 'flow' : 'paged';
+    if (mode !== 'overview' && mode !== auto && !layout.forced) mode = auto;
+    var k = mode === 'paged' ? Math.min(vw / W, vh / H)
+          : mode === 'flow' ? Math.min(1, (vw - 24) / W)
+          : Math.max(0.12, Math.min(0.22, (vw - 120) / 3 / W));
+    deck.style.setProperty('--k', k);
+    deck.classList.remove('paged', 'flow', 'overview');
+    deck.classList.add(mode);
+    document.body.classList.toggle('flow', mode === 'flow');
+    document.body.classList.toggle('overview', mode === 'overview');
+    root.classList.toggle('flow', mode === 'flow');
+    root.classList.toggle('overview', mode === 'overview');
+    Deck.scale = k; Deck.mode = mode;
+  }
+
+  function setMode(m) { layout.forced = m !== 'paged'; mode = m; layout(); paint(); }
+
+  function stepsOf(i) {
+    var max = 0;
+    slides[i].querySelectorAll('[data-step]').forEach(function (el) { max = Math.max(max, +el.getAttribute('data-step') || 1); });
+    return max;
+  }
+
+  function paint() {
+    frames.forEach(function (f, i) { f.classList.toggle('active', i === index); });
+    slides[index].querySelectorAll('[data-step]').forEach(function (el) {
+      el.classList.toggle('on', (+el.getAttribute('data-step') || 1) <= step);
+    });
+    progress.style.width = (slides.length > 1 ? index / (slides.length - 1) * 100 : 100) + '%';
+    count.textContent = (index + 1) + ' / ' + slides.length;
+  }
+
+  function go(target, atEnd) {
+    var i = typeof target === 'number' ? target : slides.findIndex(function (s) { return s.id === target; });
+    if (i < 0 || i >= slides.length) return false;
+    var prev = index, changed = i !== index || !go.started;
+    if (changed && go.started) slides[prev].dispatchEvent(new CustomEvent('deck:leave', { bubbles: true }));
+    index = i; step = atEnd ? stepsOf(i) : 0; go.started = true;
+    paint();
+    if (slides[i].id && location.hash !== '#' + slides[i].id) history.replaceState(null, '', '#' + slides[i].id);
+    if (changed) slides[i].dispatchEvent(new CustomEvent('deck:enter', { bubbles: true }));
+    if (mode !== 'paged') frames[i].scrollIntoView({ block: 'nearest' });
+    return true;
+  }
+
+  function next() { if (step < stepsOf(index)) { step++; paint(); } else go(index + 1); }
+  function prev() { if (step > 0) { step--; paint(); } else go(index - 1, true); }
+  function fromHash() { var id = decodeURIComponent(location.hash.slice(1)); return id ? go(id) : false; }
+
+  // Keyboard. Arrow keys belong to whatever the presenter is operating:
+  // a focused form field, or a figure that declares data-keys="local".
+  // PageDown / PageUp (what clickers send) always turn the page.
+  function onKey(e) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    var t = e.target, k = e.key;
+    var typing = t.closest && t.closest('input, select, textarea, [contenteditable], [data-keys="local"]');
+    if (k === 'Escape') { if (document.activeElement) document.activeElement.blur(); if (mode === 'overview') setMode('paged'); return; }
+    if (k === 'PageDown') { next(); e.preventDefault(); return; }
+    if (k === 'PageUp') { prev(); e.preventDefault(); return; }
+    if (typing) return;
+    if (k === ' ' && t.closest && t.closest('button, a')) return;
+    if (k === 'ArrowRight' || k === 'ArrowDown' || k === ' ') { next(); e.preventDefault(); }
+    else if (k === 'ArrowLeft' || k === 'ArrowUp') { prev(); e.preventDefault(); }
+    else if (k === 'Home') go(0);
+    else if (k === 'End') go(slides.length - 1);
+    else if (k === 'o' || k === 'O') setMode(mode === 'overview' ? 'paged' : 'overview');
+    else if (k === 'f' || k === 'F') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+    else if (k === 'r' || k === 'R') { if (window.DeckReview) window.DeckReview.toggle(); }
+  }
+
+  function touch() {
+    var x0 = null;
+    window.addEventListener('touchstart', function (e) {
+      x0 = e.target.closest('[data-interactive]') ? null : e.touches[0].clientX;
+    }, { passive: true });
+    window.addEventListener('touchend', function (e) {
+      if (x0 === null || mode !== 'paged') return;
+      var dx = e.changedTouches[0].clientX - x0;
+      if (dx < -60) next(); else if (dx > 60) prev();
+    }, { passive: true });
+  }
+
+  var Deck = window.Deck = {
+    W: W, H: H, scale: 1, mode: 'paged', errors: errors,
+    go: go, next: next, prev: prev, setMode: setMode,
+    get index() { return index; },
+    get slides() { return slides; },
+    get current() { return slides[index]; }
+  };
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+})();
+
+</script>
+<script>
+/* deckflow figure kit — optional helpers for the three things decks keep needing:
+   Kit.plot     a labelled line/scatter chart (axis labels and legend are mandatory)
+   Kit.player   play / speed / scrub-bar-with-phases for any time-based drawing
+   Kit.panzoom  wheel-zoom, drag and double-click-reset on an SVG group
+   Hand-drawn SVG is always allowed instead; the kit only removes boilerplate. */
+(function () {
+  'use strict';
+  var NS = 'http://www.w3.org/2000/svg';
+  function svg(tag, attrs, parent) {
+    var el = document.createElementNS(NS, tag);
+    for (var k in attrs) el.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(el);
+    return el;
+  }
+  function html(tag, cls, parent, text) {
+    var el = document.createElement(tag);
+    if (cls) el.className = cls;
+    if (text != null) el.textContent = text;
+    if (parent) parent.appendChild(el);
+    return el;
+  }
+  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function fmt(v) {
+    if (v === 0) return '0';
+    var a = Math.abs(v);
+    if (a >= 1e4 || a < 1e-3) {
+      var e = Math.floor(Math.log10(a) + 1e-9), m = v / Math.pow(10, e);
+      var sup = String(e).replace(/[-0-9]/g, function (c) { return '⁻⁰¹²³⁴⁵⁶⁷⁸⁹'['-0123456789'.indexOf(c)]; });
+      return (Math.abs(m - 1) < 1e-6 ? '' : m.toFixed(1) + '×') + '10' + sup;
+    }
+    return String(+v.toPrecision(3));
+  }
+
+  function axis(spec, lo, hi) {
+    var log = spec.scale === 'log';
+    var d0 = log ? Math.log10(spec.domain[0]) : spec.domain[0];
+    var d1 = log ? Math.log10(spec.domain[1]) : spec.domain[1];
+    var f = function (v) { return lo + ((log ? Math.log10(v) : v) - d0) / (d1 - d0) * (hi - lo); };
+    f.inv = function (p) { var u = d0 + (p - lo) / (hi - lo) * (d1 - d0); return log ? Math.pow(10, u) : u; };
+    if (spec.ticks) f.ticks = spec.ticks;
+    else if (log) {
+      f.ticks = [];
+      var stepE = Math.max(1, Math.ceil((d1 - d0) / 6));
+      for (var e = Math.ceil(d0 - 1e-9); e <= d1 + 1e-9; e += stepE) f.ticks.push(Math.pow(10, e));
+    } else {
+      var raw = (d1 - d0) / 5, p10 = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / p10;
+      var st = (n < 1.5 ? 1 : n < 3.5 ? 2 : n < 7.5 ? 5 : 10) * p10;
+      f.ticks = [];
+      for (var t = Math.ceil(d0 / st - 1e-9) * st; t <= d1 + st * 1e-6; t += st) f.ticks.push(+t.toPrecision(12));
+    }
+    return f;
+  }
+
+  /* Kit.plot(el, {
+       x: {label, domain:[a,b], scale:'linear'|'log', ticks?},   // label is required
+       y: {label, domain:[a,b], scale:'linear'|'log', ticks?},   // label is required
+       series: [{name, color, points:[[x,y],...], dash?, width?, marker?:true, line?:false}],
+       bands:  [{x0, x1, color, label?}],        // shaded x-ranges
+       lines:  [{y?|x?, label?, color?}],        // reference lines
+       cursor: {x, onMove(x)}                    // draggable vertical cursor
+     })  ->  {update(partialOpts), setCursor(x), root} */
+  function plot(el, opts) {
+    if (!opts.x || !opts.x.label || !opts.y || !opts.y.label)
+      throw new Error('Kit.plot: x.label and y.label are required (say what the axis means, with units)');
+    var hidden = {};
+    el.classList.add('kit-plot');
+    el.setAttribute('data-chart', '');
+    el.style.display = 'flex'; el.style.flexDirection = 'column'; el.style.gap = '12px';
+    el.style.minHeight = '0'; el.style.minWidth = '0';
+    el.innerHTML = '';
+    var root = svg('svg', { role: 'img' }, el);
+    root.style.flex = '1'; root.style.minHeight = '0'; root.style.width = '100%'; root.style.display = 'block';
+    var legend = html('div', 'legend', el);
+    legend.setAttribute('data-role', 'legend');
+    legend.setAttribute('data-interactive', '');
+
+    function draw() {
+      var Wd = Math.max(320, root.clientWidth || 800), Ht = Math.max(240, root.clientHeight || 500);
+      var fs = opts.fontSize || 24, m = { l: 3.9 * fs + 44, r: 28, t: 18, b: 2 * fs + 46 };
+      root.setAttribute('viewBox', '0 0 ' + Wd + ' ' + Ht);
+      root.innerHTML = '';
+      var X = axis(opts.x, m.l, Wd - m.r), Y = axis(opts.y, Ht - m.b, m.t);
+      var cLine = css('--line'), cFg = css('--fg'), cMuted = css('--muted');
+      var g = svg('g', { 'font-size': fs, 'font-family': css('--font-sans'), fill: cFg }, root);
+
+      (opts.bands || []).forEach(function (b) {
+        svg('rect', { x: X(b.x0), y: m.t, width: X(b.x1) - X(b.x0), height: Ht - m.b - m.t, fill: b.color, opacity: .13 }, g);
+        if (b.label) svg('text', { x: (X(b.x0) + X(b.x1)) / 2, y: m.t + fs + 4, 'text-anchor': 'middle', fill: b.color, 'font-weight': 600 }, g).textContent = b.label;
+      });
+      X.ticks.forEach(function (t) {
+        svg('line', { x1: X(t), x2: X(t), y1: m.t, y2: Ht - m.b, stroke: cLine, 'stroke-width': 1.5 }, g);
+        svg('text', { x: X(t), y: Ht - m.b + fs + 8, 'text-anchor': 'middle', fill: cMuted }, g).textContent = fmt(t);
+      });
+      Y.ticks.forEach(function (t) {
+        svg('line', { x1: m.l, x2: Wd - m.r, y1: Y(t), y2: Y(t), stroke: cLine, 'stroke-width': 1.5 }, g);
+        svg('text', { x: m.l - 12, y: Y(t) + fs * .35, 'text-anchor': 'end', fill: cMuted }, g).textContent = fmt(t);
+      });
+      svg('rect', { x: m.l, y: m.t, width: Wd - m.r - m.l, height: Ht - m.b - m.t, fill: 'none', stroke: cFg, 'stroke-width': 2 }, g);
+      var xl = svg('text', { x: (m.l + Wd - m.r) / 2, y: Ht - 10, 'text-anchor': 'middle', 'font-weight': 600, 'data-role': 'xlabel' }, g);
+      xl.textContent = opts.x.label;
+      var yl = svg('text', { transform: 'translate(' + (fs + 2) + ',' + (m.t + Ht - m.b) / 2 + ') rotate(-90)', 'text-anchor': 'middle', 'font-weight': 600, 'data-role': 'ylabel' }, g);
+      yl.textContent = opts.y.label;
+
+      (opts.lines || []).forEach(function (l) {
+        var c = l.color || cMuted, a = l.y != null
+          ? { x1: m.l, x2: Wd - m.r, y1: Y(l.y), y2: Y(l.y) } : { x1: X(l.x), x2: X(l.x), y1: m.t, y2: Ht - m.b };
+        a.stroke = c; a['stroke-width'] = 2.5; a['stroke-dasharray'] = '10 8';
+        svg('line', a, g);
+        if (l.label) svg('text', l.y != null ? { x: Wd - m.r - 10, y: Y(l.y) - 10, 'text-anchor': 'end', fill: c }
+                                            : { x: X(l.x) + 10, y: m.t + fs + 4, fill: c }, g).textContent = l.label;
+      });
+
+      var clipId = 'kc' + Math.random().toString(36).slice(2);
+      svg('rect', { x: m.l, y: m.t, width: Wd - m.r - m.l, height: Ht - m.b - m.t }, svg('clipPath', { id: clipId }, g));
+      var data = svg('g', { 'clip-path': 'url(#' + clipId + ')' }, g);
+      opts.series.forEach(function (s) {
+        if (hidden[s.name]) return;
+        var lo = opts.y.scale === 'log' ? opts.y.domain[0] : -Infinity;
+        var pts = s.points.filter(function (p) { return isFinite(p[0]) && isFinite(p[1]); })
+          .map(function (p) { return [X(p[0]), Y(Math.max(p[1], lo))]; });
+        if (s.line !== false) svg('polyline', {
+          points: pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' '),
+          fill: 'none', stroke: s.color, 'stroke-width': s.width || 4.5, 'stroke-linejoin': 'round',
+          'stroke-dasharray': s.dash ? '14 9' : 'none'
+        }, data);
+        if (s.marker) pts.forEach(function (p) { svg('circle', { cx: p[0], cy: p[1], r: s.r || 8, fill: s.color, stroke: css('--bg'), 'stroke-width': 2 }, data); });
+      });
+
+      if (opts.cursor) {
+        var cx = X(opts.cursor.x);
+        svg('line', { x1: cx, x2: cx, y1: m.t, y2: Ht - m.b, stroke: cFg, 'stroke-width': 2.5 }, g);
+        svg('circle', { cx: cx, cy: m.t, r: 9, fill: cFg }, g);
+        var hit = svg('rect', { x: m.l, y: m.t, width: Wd - m.r - m.l, height: Ht - m.b - m.t, fill: 'transparent', 'data-interactive': '' }, g);
+        hit.style.cursor = 'ew-resize';
+        var move = function (e) {
+          var p = root.getScreenCTM().inverse();
+          var px = e.clientX * p.a + p.e;
+          var v = Math.min(Math.max(X.inv(px), Math.min.apply(0, opts.x.domain)), Math.max.apply(0, opts.x.domain));
+          opts.cursor.x = v; draw();
+          if (opts.cursor.onMove) opts.cursor.onMove(v);
+        };
+        hit.addEventListener('pointerdown', function (e) {
+          move(e);
+          var up = function () { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+          window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+        });
+      }
+
+      legend.innerHTML = '';
+      opts.series.forEach(function (s) {
+        var b = html('button', 'key' + (hidden[s.name] ? ' off' : ''), legend);
+        b.type = 'button';
+        var sw = html('span', 'swatch' + (s.line === false ? ' dot' : s.dash ? ' dash' : ''), b);
+        sw.style.setProperty('--c', s.color);
+        html('span', '', b, s.name);
+        b.addEventListener('click', function () { hidden[s.name] = !hidden[s.name]; b.blur(); draw(); });
+      });
+    }
+
+    draw();
+    if (window.ResizeObserver) new ResizeObserver(function () { draw(); }).observe(root);
+    return {
+      root: root,
+      update: function (o) { for (var k in o) opts[k] = o[k]; draw(); },
+      setCursor: function (x) { if (opts.cursor) { opts.cursor.x = x; draw(); } }
+    };
+  }
+
+  /* Kit.player(el, {
+       duration,                 // length of the story in model units (ms, steps, rounds…)
+       rate,                     // model units per real second at 1×
+       draw(t),                  // render the state at model time t
+       phases: [{name, t0, t1}], // optional; drawn on the scrub bar, click to jump
+       speeds: [0.25, 0.5, 1, 2, 4],
+       format(t)                 // readout text, e.g. t => t.toFixed(1) + ' ms'
+     })  ->  {play(), pause(), seek(t), t} */
+  function player(el, o) {
+    var speeds = o.speeds || [0.25, 0.5, 1, 2, 4], speed = 1, t = 0, playing = false, last = 0, raf = 0;
+    el.classList.add('kit-player', 'controls');
+    el.setAttribute('data-interactive', '');
+    var btn = html('button', '', el, 'Play'); btn.type = 'button'; btn.style.minWidth = '112px';
+    var seg = html('span', 'seg', el);
+    speeds.forEach(function (s) {
+      var b = html('button', s === 1 ? 'on' : '', seg, s + '×'); b.type = 'button';
+      b.addEventListener('click', function () {
+        speed = s; seg.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); }); b.blur();
+      });
+    });
+    var bar = html('div', 'kit-bar', el);
+    bar.style.cssText = 'position:relative;flex:1;min-width:300px;height:48px;border-radius:10px;overflow:hidden;cursor:pointer;border:1.5px solid var(--line);background:var(--surface);touch-action:none';
+    (o.phases || []).forEach(function (p, i) {
+      var d = html('div', '', bar, p.name);
+      d.style.cssText = 'position:absolute;top:0;bottom:0;display:grid;place-items:center;font-size:24px;white-space:nowrap;overflow:hidden;color:var(--muted);border-right:1.5px solid var(--line)';
+      d.style.left = p.t0 / o.duration * 100 + '%';
+      d.style.width = (p.t1 - p.t0) / o.duration * 100 + '%';
+      d.style.background = i % 2 ? 'color-mix(in srgb, var(--fg) 5%, transparent)' : 'transparent';
+    });
+    var fill = html('div', '', bar);
+    fill.style.cssText = 'position:absolute;left:0;top:0;bottom:0;background:color-mix(in srgb, var(--accent) 22%, transparent);border-right:3px solid var(--accent);pointer-events:none';
+    var read = html('span', 'mono', el); read.style.minWidth = '150px'; read.style.textAlign = 'right';
+
+    function render() {
+      fill.style.width = t / o.duration * 100 + '%';
+      read.textContent = o.format ? o.format(t) : t.toFixed(1);
+      btn.textContent = playing ? 'Pause' : (t >= o.duration ? 'Replay' : 'Play');
+      o.draw(t);
+    }
+    function tick(now) {
+      if (!playing) return;
+      t = Math.min(o.duration, t + (now - last) / 1000 * o.rate * speed); last = now;
+      if (t >= o.duration) playing = false;
+      render();
+      if (playing) raf = requestAnimationFrame(tick);
+    }
+    function play() { if (t >= o.duration) t = 0; playing = true; last = performance.now(); raf = requestAnimationFrame(tick); render(); }
+    function pause() { playing = false; cancelAnimationFrame(raf); render(); }
+    function seek(v) { t = Math.min(o.duration, Math.max(0, v)); render(); }
+    btn.addEventListener('click', function () { playing ? pause() : play(); btn.blur(); });
+    var scrub = function (e) { var r = bar.getBoundingClientRect(); seek((e.clientX - r.left) / r.width * o.duration); };
+    bar.addEventListener('pointerdown', function (e) {
+      scrub(e);
+      var up = function () { window.removeEventListener('pointermove', scrub); window.removeEventListener('pointerup', up); };
+      window.addEventListener('pointermove', scrub); window.addEventListener('pointerup', up);
+    });
+    var slide = el.closest('.slide');
+    if (slide) slide.addEventListener('deck:leave', pause);
+    render();
+    return { play: play, pause: pause, seek: seek, get t() { return t; } };
+  }
+
+  /* Kit.panzoom(svgRoot, group, {max: 20})
+     wheel = zoom about the pointer, drag = pan, double-click = reset. */
+  function panzoom(root, group, o) {
+    o = o || {};
+    var k = 1, x = 0, y = 0, max = o.max || 20;
+    root.setAttribute('data-interactive', '');
+    root.style.cursor = 'grab'; root.style.touchAction = 'none';
+    function apply() { group.setAttribute('transform', 'translate(' + x + ',' + y + ') scale(' + k + ')'); if (o.onChange) o.onChange(k); }
+    function pt(e) { var m = root.getScreenCTM().inverse(); return [e.clientX * m.a + m.e, e.clientY * m.d + m.f]; }
+    root.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      var p = pt(e), nk = Math.min(max, Math.max(1, k * Math.exp(-e.deltaY * 0.0015)));
+      x = p[0] - (p[0] - x) * nk / k; y = p[1] - (p[1] - y) * nk / k; k = nk;
+      if (k === 1) { x = 0; y = 0; }
+      apply();
+    }, { passive: false });
+    root.addEventListener('pointerdown', function (e) {
+      var p0 = pt(e), x0 = x, y0 = y; root.style.cursor = 'grabbing';
+      var mv = function (ev) { var p = pt(ev); x = x0 + p[0] - p0[0]; y = y0 + p[1] - p0[1]; apply(); };
+      var up = function () { root.style.cursor = 'grab'; window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); };
+      window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+    });
+    root.addEventListener('dblclick', function () { k = 1; x = 0; y = 0; apply(); });
+    return { reset: function () { k = 1; x = 0; y = 0; apply(); }, get k() { return k; } };
+  }
+
+  window.Kit = { plot: plot, player: player, panzoom: panzoom, svg: svg, html: html, css: css, fmt: fmt };
+})();
+
+</script>
+<script>
+/* deckflow review — the contract, checked in the browser where layout is real.
+   Press R (or open with ?review) for the panel; agents call DeckReview.run()
+   and get the same report as JSON. Rules are documented in docs/contract.md.
+
+   level: error   breaks the contract — fix before showing anyone
+          warn    breaks a default — fix, or waive with data-allow on the slide
+          open    not a defect: something the human still has to supply or confirm */
+(function () {
+  'use strict';
+  var FONT_ERROR = 20, FONT_WARN = 24, WORD_BUDGET = 45, PARA_BUDGET = 28;
+
+  function visible(el) {
+    var cs = getComputedStyle(el);
+    return cs.display !== 'none' && cs.visibility !== 'collapse' && +cs.opacity !== 0 || el.hasAttribute('data-step');
+  }
+  function words(text) {
+    var cjk = (text.match(/[㐀-鿿豈-﫿]/g) || []).length;
+    var latin = (text.replace(/[㐀-鿿豈-﫿]/g, ' ').match(/[A-Za-z0-9][A-Za-z0-9'’\-.]*/g) || []).length;
+    return latin + Math.ceil(cjk / 2);
+  }
+  function hint(el) {
+    var s = el.tagName.toLowerCase();
+    if (el.id) s += '#' + el.id;
+    else if (el.classList && el.classList.length) s += '.' + el.classList[0];
+    var t = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    return t ? s + ' “' + t + '”' : s;
+  }
+
+  function checkSlide(slide, i, seen, deck) {
+    var out = [], k = window.Deck.scale || 1;
+    var allow = (slide.getAttribute('data-allow') || '').split(/[\s,]+/).filter(Boolean);
+    var layout = slide.getAttribute('data-layout') || 'default';
+    function add(level, rule, msg) {
+      if (level === 'warn' && allow.indexOf(rule) >= 0) { out.push({ level: 'waived', rule: rule, msg: msg }); return; }
+      out.push({ level: level, rule: rule, msg: msg });
+    }
+
+    // identity: pages get renumbered, ids must not
+    if (!slide.id) add('error', 'id', 'slide has no id — give it a short semantic id (e.g. id="pareto")');
+    else if (/^(s|p|slide|page)?[-_]?\d+$/i.test(slide.id)) add('error', 'id', 'id "' + slide.id + '" is a page number; use a semantic id that survives reordering');
+    else if (seen[slide.id]) add('error', 'id', 'duplicate id "' + slide.id + '"');
+    seen[slide.id] = true;
+
+    // title
+    var title = slide.querySelector(':scope > h2, :scope h1');
+    if (!title && layout !== 'bare') add('error', 'title', 'no title (h2). Use data-layout="bare" if the figure is the whole slide');
+    if (title && layout === 'default') {
+      var tw = words(title.textContent), style = deck.getAttribute('data-title-style') || 'topic';
+      if (style === 'topic' && tw > 9) add('warn', 'title', 'title is ' + tw + ' words; brief.md says titles are short topic phrases');
+      if (style === 'claim' && tw > 22) add('warn', 'title', 'title is ' + tw + ' words; even a claim should fit two lines');
+    }
+
+    // geometry: nothing may leave the stage or be clipped
+    var box = slide.getBoundingClientRect(), offenders = [];
+    slide.querySelectorAll('*').forEach(function (el) {
+      if (el.closest('svg') && el.tagName.toLowerCase() !== 'svg') return;
+      if (el.closest('[data-clip]')) return;
+      if (!visible(el)) return;
+      var r = el.getBoundingClientRect();
+      if (!r.width && !r.height) return;
+      var over = Math.max(box.left - r.left, r.right - box.right, box.top - r.top, r.bottom - box.bottom) / k;
+      if (over > 2) offenders.push(hint(el) + ' (' + Math.round(over) + 'px outside)');
+      else if (el.scrollHeight - el.clientHeight > 3 && getComputedStyle(el).overflowY !== 'visible' && el.clientHeight > 0)
+        offenders.push(hint(el) + ' (content clipped by ' + (el.scrollHeight - el.clientHeight) + 'px)');
+    });
+    if (offenders.length) add('error', 'overflow', offenders.length + ' element(s) overflow: ' + offenders.slice(0, 3).join('; '));
+
+    // legibility: effective font size on the 1920×1080 stage, SVG scaling included
+    var small = {}, tooSmall = {}, minSeen = Infinity;
+    var tw2 = document.createTreeWalker(slide, NodeFilter.SHOW_TEXT);
+    var proseWords = 0, longPara = 0;
+    while (tw2.nextNode()) {
+      var node = tw2.currentNode, text = node.nodeValue.trim();
+      if (!text) continue;
+      var p = node.parentElement;
+      if (!p || !visible(p) || p.closest('script, style, [data-review-ignore]')) continue;
+      var size = parseFloat(getComputedStyle(p).fontSize);
+      var owner = p.ownerSVGElement;
+      if (owner && owner.getScreenCTM()) { var m = p.getScreenCTM() || owner.getScreenCTM(); size = size * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) / k; }
+      minSeen = Math.min(minSeen, size);
+      if (size < FONT_ERROR - 0.5) tooSmall[hint(p)] = Math.round(size);
+      else if (size < FONT_WARN - 0.5) small[hint(p)] = Math.round(size);
+      // prose budget: text that is not a title, a figure, a table, a legend or a control
+      if (!p.closest('h1, h2, figure, svg, table, .legend, .controls, .seg, button, [data-role], .placeholder, .big, .mono'))
+        proseWords += words(text);
+    }
+    var ks = Object.keys(tooSmall), kw = Object.keys(small);
+    if (ks.length) add('error', 'font', ks.length + ' text run(s) under ' + FONT_ERROR + 'px (unreadable when projected): ' + ks.slice(0, 3).map(function (h) { return h + ' = ' + tooSmall[h] + 'px'; }).join('; '));
+    if (kw.length) add('warn', 'font', kw.length + ' text run(s) under ' + FONT_WARN + 'px: ' + kw.slice(0, 3).map(function (h) { return h + ' = ' + small[h] + 'px'; }).join('; '));
+
+    slide.querySelectorAll('p, li').forEach(function (el) {
+      if (el.closest('figure, .placeholder')) return;
+      if (words(el.textContent) > PARA_BUDGET) longPara++;
+    });
+    if (layout === 'default') {
+      if (proseWords > WORD_BUDGET) add('warn', 'words', proseWords + ' words of prose (budget ' + WORD_BUDGET + '). Say it in the figure or say it aloud');
+      if (longPara) add('warn', 'words', longPara + ' explanatory paragraph(s) over ' + PARA_BUDGET + ' words');
+      if (!slide.querySelector('figure, svg, canvas, table, img, video, .cards, .big, .placeholder'))
+        add('warn', 'visual', 'text-only slide: there is nothing to look at');
+    }
+
+    // figures: a chart must say what its axes mean; every figure must say where it comes from
+    slide.querySelectorAll('figure').forEach(function (fig) {
+      var name = fig.id ? '#' + fig.id : hint(fig);
+      var isChart = fig.getAttribute('data-kind') === 'chart' || fig.querySelector('[data-chart]');
+      if (isChart) {
+        if (!fig.querySelector('[data-role="xlabel"]')) add('error', 'axes', name + ': chart has no x-axis label ([data-role="xlabel"])');
+        if (!fig.querySelector('[data-role="ylabel"]')) add('error', 'axes', name + ': chart has no y-axis label ([data-role="ylabel"])');
+        if (!fig.querySelector('[data-role="legend"]') && !fig.hasAttribute('data-single-series')) add('warn', 'legend', name + ': chart has no legend ([data-role="legend"])');
+      }
+      var src = fig.getAttribute('data-src'), kind = fig.getAttribute('data-kind');
+      if (!src && kind !== 'schematic' && !fig.querySelector('[data-placeholder]') && !fig.hasAttribute('data-placeholder'))
+        add('warn', 'provenance', name + ': no data-src. Cite the source id from sources.md, or mark data-kind="schematic"');
+    });
+
+    // open items: surfaced so the human is asked, never left to notice
+    slide.querySelectorAll('[data-placeholder]').forEach(function (el) {
+      add('open', 'placeholder', 'waiting for: ' + (el.getAttribute('data-placeholder') || hint(el)));
+    });
+    slide.querySelectorAll('[data-derived]').forEach(function (el) {
+      add('open', 'derived', hint(el) + ' — derived by the agent: ' + el.getAttribute('data-derived'));
+    });
+    slide.querySelectorAll('[data-unverified]').forEach(function (el) {
+      add('open', 'unverified', hint(el) + ' — not checked against a source' + (el.getAttribute('data-unverified') ? ': ' + el.getAttribute('data-unverified') : ''));
+    });
+
+    // interaction hygiene
+    slide.querySelectorAll('input, select, textarea').forEach(function (el) {
+      if (!el.closest('[data-interactive]')) add('warn', 'interactive', hint(el) + ' is not inside [data-interactive]');
+    });
+    if (slide.querySelector('iframe')) add('error', 'portable', 'iframe found — hosted pages blank them out; inline the content instead');
+
+    return { id: slide.id || '(none)', index: i + 1, minFont: isFinite(minSeen) ? Math.round(minSeen) : null, issues: out };
+  }
+
+  function run() {
+    var deck = document.querySelector('.deck'), seen = {}, global = [];
+    // measure with every step revealed
+    var report = { slides: window.Deck.slides.map(function (s, i) { return checkSlide(s, i, seen, deck); }) };
+
+    document.querySelectorAll('script[src], link[rel="stylesheet"][href], img[src], video[src], audio[src], source[src]').forEach(function (el) {
+      var u = el.getAttribute('src') || el.getAttribute('href');
+      if (/^data:/.test(u)) return;
+      if (/^(https?:)?\/\//.test(u)) global.push({ level: 'error', rule: 'portable', msg: 'external resource ' + u + ' — the deck must work offline as one file' });
+      else global.push({ level: 'open', rule: 'portable', msg: 'local file ' + u + ' is not inlined yet — run tools/build.py before sharing' });
+    });
+    (window.Deck.errors || []).forEach(function (m) { global.push({ level: 'error', rule: 'runtime', msg: 'JavaScript error: ' + m }); });
+
+    report.global = global;
+    var tally = { error: 0, warn: 0, open: 0, waived: 0 };
+    report.slides.forEach(function (s) { s.issues.forEach(function (x) { tally[x.level]++; }); });
+    global.forEach(function (x) { tally[x.level]++; });
+    report.summary = tally;
+    report.pass = tally.error === 0;
+    return report;
+  }
+
+  // ---------- panel ----------
+  var panel, tags = [];
+  var COLORS = { error: '#c8374c', warn: '#c97a00', open: '#2f6fd0', waived: '#888' };
+  function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
+
+  function show() {
+    hide();
+    var r = run();
+    panel = document.createElement('aside');
+    panel.className = 'review-panel';
+    panel.setAttribute('data-review-ignore', '');
+    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:440px;max-width:90vw;overflow:auto;z-index:20;background:#15171c;color:#e8e8ea;font:14px/1.45 system-ui,sans-serif;padding:18px 20px;box-shadow:-8px 0 40px rgba(0,0,0,.35)';
+    var h = '<div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:17px">Review</b><span style="opacity:.6">R to close</span></div>';
+    h += '<div style="margin:10px 0 16px;display:flex;gap:8px;flex-wrap:wrap">';
+    ['error', 'warn', 'open', 'waived'].forEach(function (l) {
+      h += '<span style="padding:3px 10px;border-radius:99px;background:' + COLORS[l] + ';color:#fff">' + r.summary[l] + ' ' + l + '</span>';
+    });
+    h += '</div>';
+    function list(items) {
+      return items.map(function (x) {
+        return '<div style="margin:5px 0 5px 4px;padding-left:10px;border-left:3px solid ' + COLORS[x.level] + '"><span style="opacity:.6">' + x.rule + '</span> ' + esc(x.msg) + '</div>';
+      }).join('');
+    }
+    if (r.global.length) h += '<div style="margin-bottom:12px"><b>deck</b>' + list(r.global) + '</div>';
+    r.slides.forEach(function (s) {
+      h += '<div style="margin-bottom:12px"><a href="#' + esc(s.id) + '" style="color:#b9b3ff;text-decoration:none"><b>' + s.index + ' · ' + esc(s.id) + '</b></a>'
+        + (s.issues.length ? list(s.issues) : '<span style="opacity:.5"> — clean</span>') + '</div>';
+    });
+    panel.innerHTML = h;
+    document.body.appendChild(panel);
+    // show the stable id on every slide: this is the name humans and agents use for it
+    window.Deck.slides.forEach(function (s) {
+      var t = document.createElement('div');
+      t.className = 'review-tag';
+      t.setAttribute('data-review-ignore', '');
+      t.textContent = '#' + (s.id || '?');
+      t.style.cssText = 'position:absolute;left:0;top:0;z-index:9;background:#15171c;color:#fff;font:600 22px ui-monospace,Consolas,monospace;padding:6px 14px;border-radius:0 0 12px 0';
+      s.appendChild(t); tags.push(t);
+    });
+    return r;
+  }
+  function hide() {
+    if (panel) { panel.remove(); panel = null; }
+    tags.forEach(function (t) { t.remove(); }); tags = [];
+  }
+
+  window.DeckReview = { run: run, show: show, hide: hide, toggle: function () { panel ? hide() : show(); } };
+  document.addEventListener('deck:ready', function () {
+    if (new URLSearchParams(location.search).has('review')) setTimeout(show, 300);
+  });
+})();
+
+</script>
+<script>
+(function () {
+  'use strict';
+  var S = Kit.svg, $ = function (id) { return document.getElementById(id); };
+
+  // ---------------------------------------------------------------- loop
+  (function () {
+    var stages = [
+      { n: 'Brief',      file: 'brief.md',        ai: 'Reads the material, drafts the brief, asks at most three questions.', human: 'Fixes audience, language and what never goes on a slide.' },
+      { n: 'Sources',    file: 'sources.md',      ai: 'Registers every source and reports numbers that disagree.',          human: 'Says which source wins.' },
+      { n: 'Storyboard', file: 'storyboard.md',   ai: 'Writes one entry per slide: point, figure, source.',                 human: 'Approves, rewrites or cuts each point.' },
+      { n: 'Build',      file: 'deck.html',       ai: 'Draws the figures and wires the interaction.',                       human: 'Nothing yet.' },
+      { n: 'Check',      file: 'DeckReview.run()', ai: 'Runs the review, screenshots every slide, operates every control.', human: 'Nothing yet.' },
+      { n: 'Review',     file: 'review.md',       ai: 'Lists what changed, what is missing, what it inferred.',             human: 'Comments by slide id.' },
+      { n: 'Ship',       file: 'dist/talk.html',  ai: 'Bundles everything into one offline file.',                          human: 'Shares it.' }
+    ];
+    var svg = $('loop-svg'), w = 196, h = 104, y = 96, x0 = 22, dx = 248;
+    var cx = function (i) { return x0 + w / 2 + i * dx; };
+    S('path', { d: 'M0 0 L12 6 L0 12 z', class: 'f-muted', transform: 'scale(1)' }, S('marker', { id: 'arr', markerWidth: 12, markerHeight: 12, refX: 11, refY: 6, orient: 'auto', markerUnits: 'userSpaceOnUse' }, S('defs', {}, svg)));
+    S('path', { d: 'M0 0 L12 6 L0 12 z', class: 'f-accent' }, S('marker', { id: 'arr2', markerWidth: 12, markerHeight: 12, refX: 11, refY: 6, orient: 'auto', markerUnits: 'userSpaceOnUse' }, svg.querySelector('defs')));
+    for (var i = 0; i < 6; i++) S('line', { x1: cx(i) + w / 2 + 4, x2: cx(i + 1) - w / 2 - 6, y1: y + h / 2, y2: y + h / 2, class: 's-muted', 'stroke-width': 3, 'marker-end': 'url(#arr)' }, svg);
+    [[0, 'G0'], [2, 'G1'], [5, 'G2']].forEach(function (g) {
+      var gx = cx(g[0]) + dx / 2, gy = y + h / 2;
+      S('rect', { x: gx - 19, y: gy - 19, width: 38, height: 38, rx: 5, transform: 'rotate(45 ' + gx + ' ' + gy + ')', class: 'f-warn' }, svg);
+      S('text', { x: gx, y: y - 12, 'text-anchor': 'middle', 'font-size': 26, 'font-weight': 700, class: 't-warn' }, svg).textContent = g[1];
+    });
+    // feedback arcs from Review
+    [[2, 300, 'what to say is wrong'], [3, 210, 'how it looks is wrong']].forEach(function (f) {
+      var a = cx(5) - (f[0] === 2 ? 30 : -30), b = cx(f[0]);
+      S('path', { d: 'M' + a + ' ' + (y + h + 4) + ' V' + f[1] + ' Q' + a + ' ' + (f[1] + 40) + ' ' + (a - 40) + ' ' + (f[1] + 40) + ' H' + (b + 40) + ' Q' + b + ' ' + (f[1] + 40) + ' ' + b + ' ' + f[1] + ' V' + (y + h + 10),
+        fill: 'none', class: 's-accent', 'stroke-width': 3.5, 'stroke-dasharray': '12 9', 'marker-end': 'url(#arr2)' }, svg);
+      var lbl = S('text', { x: (a + b) / 2, y: f[1] + 74, 'text-anchor': 'middle', 'font-size': 26, class: 't-accent' }, svg);
+      lbl.textContent = f[2];
+    });
+    var groups = stages.map(function (s, i) {
+      var g = S('g', { class: 'stage' }, svg);
+      S('rect', { x: cx(i) - w / 2, y: y, width: w, height: h, rx: 16 }, g);
+      S('text', { x: cx(i), y: y + 44, 'text-anchor': 'middle', 'font-size': 24, class: 't-muted' }, g).textContent = 'S' + i;
+      S('text', { x: cx(i), y: y + 82, 'text-anchor': 'middle', 'font-size': 30, 'font-weight': 650 }, g).textContent = s.n;
+      g.addEventListener('click', function () { pick(i); });
+      return g;
+    });
+    function pick(i) {
+      groups.forEach(function (g, j) { g.classList.toggle('on', i === j); });
+      ['file', 'ai', 'human'].forEach(function (k) { $('loop-detail').querySelector('[data-f="' + k + '"]').textContent = stages[i][k]; });
+    }
+    pick(2);
+  })();
+
+  // ---------------------------------------------------------------- one-point
+  (function () {
+    var svg = $('op-svg'), cap = $('op-cap');
+    function draw(mode) {
+      svg.innerHTML = '';
+      S('rect', { x: 60, y: 54, width: mode === 'text' ? 520 : 400, height: 26, rx: 13, class: 'f-fg' }, svg);
+      if (mode === 'text') {
+        var yy = 130, widths = [780, 820, 640, 800, 760, 420, 0, 810, 700, 790, 560, 0, 760, 820, 300];
+        widths.forEach(function (wd) { if (wd) S('rect', { x: 60, y: yy, width: wd * 0.62, height: 12, rx: 6, class: 'f-muted', opacity: .55 }, svg); yy += 28; });
+        S('rect', { x: 620, y: 130, width: 280, height: 190, rx: 8, fill: 'none', class: 's-line', 'stroke-width': 2 }, svg);
+        S('polyline', { points: '640,290 700,270 760,210 820,190 880,230', fill: 'none', class: 's-accent', 'stroke-width': 3 }, svg);
+        S('polyline', { points: '640,230 700,236 760,250 820,268 880,290', fill: 'none', class: 's-accent2', 'stroke-width': 3 }, svg);
+        [350, 378, 406].forEach(function (y2, j) { S('rect', { x: 620, y: y2, width: [260, 220, 240][j], height: 9, rx: 4.5, class: 'f-muted', opacity: .45 }, svg); });
+        cap.textContent = 'About 140 words and a chart the size of a stamp: the slide is the speaker’s notes.';
+      } else {
+        S('rect', { x: 110, y: 120, width: 800, height: 400, fill: 'none', class: 's-fg', 'stroke-width': 2.5 }, svg);
+        S('rect', { x: 110, y: 120, width: 370, height: 400, class: 'f-accent', opacity: .1 }, svg);
+        S('rect', { x: 480, y: 120, width: 430, height: 400, class: 'f-accent2', opacity: .1 }, svg);
+        S('text', { x: 295, y: 162, 'text-anchor': 'middle', 'font-size': 26, 'font-weight': 650, class: 't-accent' }, svg).textContent = 'plan A wins';
+        S('text', { x: 695, y: 162, 'text-anchor': 'middle', 'font-size': 26, 'font-weight': 650, class: 't-accent2' }, svg).textContent = 'plan B wins';
+        S('polyline', { points: '110,200 250,240 390,310 480,372 620,440 760,480 910,500', fill: 'none', class: 's-accent', 'stroke-width': 7, 'stroke-linejoin': 'round' }, svg);
+        S('polyline', { points: '110,330 250,345 390,360 480,372 620,388 760,400 910,410', fill: 'none', class: 's-accent2', 'stroke-width': 7, 'stroke-linejoin': 'round', 'stroke-dasharray': '16 10' }, svg);
+        S('circle', { cx: 480, cy: 372, r: 13, class: 'f-fg' }, svg);
+        S('text', { x: 510, y: 566, 'text-anchor': 'middle', 'font-size': 26 }, svg).textContent = 'read time (ms)';
+        S('text', { transform: 'translate(78 320) rotate(-90)', 'text-anchor': 'middle', 'font-size': 26 }, svg).textContent = 'rounds per second';
+        cap.textContent = 'Nine words on the slide. The crossing point is the point.';
+      }
+    }
+    $('op-seg').addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return;
+      $('op-seg').querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
+      b.blur(); draw(b.getAttribute('data-v'));
+    });
+    draw('fig');
+  })();
+
+  // ---------------------------------------------------------------- tradeoff
+  (function () {
+    // toy model: a schedule makes m moves and r reads per round
+    var T_MOVE = 0.3, E_MOVE = 0.10, E_IDLE = 0.05;   // ms, % per move, % per ms
+    var plans = [
+      { name: 'plan A · few moves, many reads', key: 'A', color: Kit.css('--accent'),   pts: [[4, 6], [6, 5], [8, 4.5], [10, 4.2]] },
+      { name: 'plan B · many moves, few reads', key: 'B', color: Kit.css('--accent-2'), pts: [[14, 2], [18, 1.5], [22, 1.2], [26, 1]], dash: true }
+    ];
+    function series(tRead) {
+      return plans.map(function (p) {
+        return { name: p.name, key: p.key, color: p.color, dash: p.dash, marker: true, points: p.pts.map(function (q) {
+          var T = q[0] * T_MOVE + q[1] * tRead;
+          return [q[0] * E_MOVE + T * E_IDLE, 1000 / T];
+        }) };
+      });
+    }
+    var slider = $('to-read');
+    var plot = Kit.plot($('to-plot'), {
+      x: { label: 'loss per round (%)', domain: [0, 3.5] },
+      y: { label: 'rounds per second', domain: [30, 1000], scale: 'log', ticks: [30, 100, 300, 1000] },
+      series: series(+slider.value)
+    });
+    function update() {
+      var t = +slider.value, s = series(t), best = null, safe = null;
+      s.forEach(function (p) { p.points.forEach(function (q) {
+        if (!best || q[1] > best.q[1]) best = { p: p, q: q };
+        if (!safe || q[0] < safe.q[0]) safe = { p: p, q: q };
+      }); });
+      plot.update({ series: s });
+      $('to-read-v').textContent = t.toFixed(2) + ' ms';
+      $('to-best').textContent = 'plan ' + best.p.key; $('to-best').style.color = best.p.color;
+      $('to-best-sub').textContent = Math.round(best.q[1]) + ' rounds/s at ' + best.q[0].toFixed(2) + '% loss';
+      $('to-safe').textContent = 'plan ' + safe.p.key; $('to-safe').style.color = safe.p.color;
+      $('to-safe-sub').textContent = safe.q[0].toFixed(2) + '% loss at ' + Math.round(safe.q[1]) + ' rounds/s';
+    }
+    slider.addEventListener('input', update);
+    update();
+  })();
+
+  // ---------------------------------------------------------------- replay
+  (function () {
+    var world = $('rp-world'), root = $('rp-svg');
+    var ROWS = 3, COLS = 4, GAP = 130, SX = 150, WX = 1190, Y0 = 170;
+    S('rect', { x: 70, y: 70, width: 560, height: 470, rx: 22, class: 'f-surface s-line', 'stroke-width': 2.5 }, world);
+    var work = S('rect', { x: 1110, y: 70, width: 560, height: 470, rx: 22, class: 'f-surface s-line', 'stroke-width': 2.5 }, world);
+    S('text', { x: 100, y: 118, 'font-size': 28, class: 't-muted' }, world).textContent = 'storage';
+    S('text', { x: 1140, y: 118, 'font-size': 28, class: 't-muted' }, world).textContent = 'work zone';
+    var beams = S('g', {}, world), items = [];
+    for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) {
+      S('circle', { cx: SX + c * GAP, cy: Y0 + r * GAP, r: 26, fill: 'none', class: 's-line', 'stroke-width': 2.5 }, world);
+      S('circle', { cx: WX + c * GAP, cy: Y0 + r * GAP, r: 26, fill: 'none', class: 's-line', 'stroke-width': 2.5 }, world);
+      items.push({ hx: SX + c * GAP, hy: Y0 + r * GAP, tx: WX + c * GAP, batch: c < 2 ? 0 : 1 });
+    }
+    items.forEach(function (it) { it.el = S('circle', { r: 19 }, world); });
+    var phases = [], names = ['pick', 'move in', 'work', 'move out', 'drop'], len = [8, 20, 8, 20, 8], t = 0;
+    for (var b = 0; b < 2; b++) names.forEach(function (n, i) { phases.push({ name: n, t0: t, t1: t + len[i], batch: b, kind: i }); t += len[i]; });
+    phases.push({ name: 'read all', t0: t, t1: t + 22, batch: -1, kind: 5 });
+    var DUR = t + 22, ease = function (u) { return u * u * (3 - 2 * u); };
+    var cFg = Kit.css('--fg'), cHeld = Kit.css('--accent-2'), cHot = Kit.css('--warn');
+
+    function draw(now) {
+      var ph = phases[phases.length - 1];
+      for (var i = 0; i < phases.length; i++) if (now < phases[i].t1) { ph = phases[i]; break; }
+      var u = Math.min(1, Math.max(0, (now - ph.t0) / (ph.t1 - ph.t0)));
+      beams.innerHTML = '';
+      work.setAttribute('stroke', ph.kind === 2 ? cHot : Kit.css('--line'));
+      work.setAttribute('stroke-width', ph.kind === 2 ? 6 : 2.5);
+      var rowsHeld = {}, colsHeld = {};
+      items.forEach(function (it) {
+        var x = it.hx, color = cFg, mine = it.batch === ph.batch;
+        if (mine) {
+          color = cHeld;
+          if (ph.kind === 1) x = it.hx + (it.tx - it.hx) * ease(u);
+          else if (ph.kind === 2) { x = it.tx; color = cHot; }
+          else if (ph.kind === 3) x = it.tx + (it.hx - it.tx) * ease(u);
+          rowsHeld[it.hy] = 1; colsHeld[Math.round(x)] = 1;
+        }
+        if (ph.kind === 5) color = Math.sin(u * Math.PI * 6) > 0 ? cHot : cFg;
+        it.el.setAttribute('cx', x); it.el.setAttribute('cy', it.hy); it.el.setAttribute('fill', color);
+      });
+      Object.keys(rowsHeld).forEach(function (y) { S('line', { x1: 40, x2: 1700, y1: y, y2: y, stroke: cHeld, 'stroke-width': 3, opacity: .35 }, beams); });
+      Object.keys(colsHeld).forEach(function (x) { S('line', { x1: x, x2: x, y1: 50, y2: 560, stroke: cHeld, 'stroke-width': 3, opacity: .35 }, beams); });
+    }
+    Kit.player($('rp-player'), {
+      duration: DUR, rate: 16, phases: phases, speeds: [0.1, 0.25, 0.5, 1, 4],
+      format: function (v) { return v.toFixed(1) + ' ms'; }, draw: draw
+    });
+    Kit.panzoom(root, world, { max: 12 });
+  })();
+
+  // ---------------------------------------------------------------- review
+  (function () {
+    var colors = { error: 'var(--bad)', warn: 'var(--warn)', open: 'var(--accent)', waived: 'var(--muted)' };
+    function run() {
+      var r = DeckReview.run(), tiles = $('rv-tiles'), list = $('rv-items');
+      tiles.innerHTML = ''; list.innerHTML = '';
+      ['error', 'warn', 'open', 'waived'].forEach(function (k) {
+        var c = Kit.html('div', 'card tile', tiles);
+        Kit.html('div', 'big', c, r.summary[k]).style.color = colors[k];
+        Kit.html('div', 'label muted', c, k);
+      });
+      var rows = [];
+      r.slides.forEach(function (s) { s.issues.forEach(function (x) { if (x.level !== 'waived') rows.push([x.level, '#' + s.id + '  ' + x.msg]); }); });
+      r.global.forEach(function (x) { rows.push([x.level, x.msg]); });
+      if (!rows.length) Kit.html('div', '', list, 'nothing open').style.setProperty('--c', 'var(--good)');
+      rows.slice(0, 6).forEach(function (row) { Kit.html('div', '', list, row[1]).style.setProperty('--c', colors[row[0]]); });
+      if (rows.length > 6) Kit.html('div', 'muted', list, '+ ' + (rows.length - 6) + ' more — press R').style.setProperty('--c', 'var(--line)');
+    }
+    $('rv-run').addEventListener('click', function () { run(); $('rv-run').blur(); });
+    $('review').addEventListener('deck:enter', function () { setTimeout(run, 60); });
+    document.addEventListener('deck:ready', function () { setTimeout(run, 60); });
+  })();
+})();
+</script>
+</body>
+</html>
